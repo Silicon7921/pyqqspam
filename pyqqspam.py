@@ -4,8 +4,6 @@ import threading
 from ctypes import wintypes
 
 MINIMUM_SLEEP = 0.0
-kernel32 = ctypes.windll.kernel32
-user32 = ctypes.windll.user32
 CF_UNICODETEXT = 13
 
 if ctypes.sizeof(ctypes.c_void_p) == 8:
@@ -13,6 +11,7 @@ if ctypes.sizeof(ctypes.c_void_p) == 8:
 else:
     ULONG_PTR = ctypes.c_uint32
 
+kernel32 = ctypes.windll.kernel32
 kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
 kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
 kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
@@ -20,6 +19,7 @@ kernel32.GlobalLock.restype = ctypes.c_void_p
 kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
 kernel32.GlobalUnlock.restype = wintypes.BOOL
 
+user32 = ctypes.windll.user32
 user32.OpenClipboard.argtypes = [wintypes.HWND]
 user32.OpenClipboard.restype = wintypes.BOOL
 user32.EmptyClipboard.restype = wintypes.BOOL
@@ -34,25 +34,20 @@ class HotkeyManager:
         self.running = True
         self.is_spamming = False
         self.lock = threading.Lock()
-        print("initializing...")
+        print("Initializing hotkey manager...")
 
-    def terminate(self):
+    def stop(self):
         self.running = False
         ctypes.windll.user32.PostQuitMessage(0)
         with self.lock:
             self.is_spamming = False
 
-    def start_listener(self):
-        from ctypes import wintypes
-
-        user32 = ctypes.windll.user32
-        byref = ctypes.byref
-
+    def listen_for_hotkeys(self):
         WH_KEYBOARD_LL = 13
         WM_KEYDOWN = 0x0100
         WM_KEYUP = 0x0101
 
-        class KBDLLHOOKSTRUCT(ctypes.Structure):
+        class KeyboardInput(ctypes.Structure):
             _fields_ = [
                 ("vkCode", wintypes.DWORD),
                 ("scanCode", wintypes.DWORD),
@@ -61,123 +56,118 @@ class HotkeyManager:
                 ("dwExtraInfo", ULONG_PTR),
             ]
 
-        def low_level_keyboard_proc(nCode, wParam, lParam):
+        def process_keyboard_event(nCode, wParam, lParam):
             if nCode == 0:
-                kb = ctypes.cast(lParam, ctypes.POINTER(KBDLLHOOKSTRUCT)).contents
+                keyboard_data = ctypes.cast(lParam, ctypes.POINTER(KeyboardInput)).contents
                 if wParam == WM_KEYDOWN:
-                    if kb.vkCode == 0x11:  # Ctrl key
+                    if keyboard_data.vkCode == 0x11:
                         self.ctrl_pressed = True
-                    elif kb.vkCode == 0x43 and self.ctrl_pressed:  # Ctrl+C
-                        self.terminate()
-                        return -1  # Stop further processing
-                    elif kb.vkCode == 0x73:  # F4 key
+                    elif keyboard_data.vkCode == 0x43 and self.ctrl_pressed:
+                        self.stop()
+                        return -1
+                    elif keyboard_data.vkCode == 0x73:
                         with self.lock:
                             self.f4_pressed = True
                 elif wParam == WM_KEYUP:
-                    if kb.vkCode == 0x11:  # Ctrl key
+                    if keyboard_data.vkCode == 0x11:
                         self.ctrl_pressed = False
-            # Ensure lParam is cast to ctypes.c_void_p
             return user32.CallNextHookEx(None, nCode, wParam, ctypes.c_void_p(lParam))
 
         HOOKPROC = ctypes.WINFUNCTYPE(wintypes.LPARAM, wintypes.INT, wintypes.WPARAM, wintypes.LPARAM)
-        self.hook_proc = HOOKPROC(low_level_keyboard_proc)
+        self.hook_proc = HOOKPROC(process_keyboard_event)
         self.hook = user32.SetWindowsHookExW(WH_KEYBOARD_LL, self.hook_proc, None, 0)
 
-        msg = ctypes.wintypes.MSG()
+        message = ctypes.wintypes.MSG()
         while self.running:
-            if user32.PeekMessageW(byref(msg), None, 0, 0, 1):
-                user32.TranslateMessage(byref(msg))
-                user32.DispatchMessageW(byref(msg))
+            if user32.PeekMessageW(ctypes.byref(message), None, 0, 0, 1):
+                user32.TranslateMessage(ctypes.byref(message))
+                user32.DispatchMessageW(ctypes.byref(message))
 
-
-def precise_sleep(duration: float):
+def sleep_precisely(duration):
     if duration <= 0:
         return
-    kernel32 = ctypes.windll.kernel32
     timer = kernel32.CreateWaitableTimerExW(None, None, 0x00000002, 0x1F0003)
     delay = ctypes.c_longlong(int(-1 * duration * 10000000))
     kernel32.SetWaitableTimer(timer, ctypes.byref(delay), 0, None, None, 0)
     kernel32.WaitForSingleObject(timer, 0xFFFFFFFF)
     kernel32.CloseHandle(timer)
 
+def simulate_message_send():
+    user32.keybd_event(0x11, 0, 0, 0)
+    user32.keybd_event(0x56, 0, 0, 0)
+    user32.keybd_event(0x56, 0, 2, 0)
+    user32.keybd_event(0x11, 0, 2, 0)
+    user32.keybd_event(0x0D, 0, 0, 0)
+    user32.keybd_event(0x0D, 0, 2, 0)
 
-def send_message():
-    user32 = ctypes.windll.user32
-    user32.keybd_event(0x11, 0, 0, 0)  # Ctrl down
-    user32.keybd_event(0x56, 0, 0, 0)  # V down
-    user32.keybd_event(0x56, 0, 2, 0)  # V up
-    user32.keybd_event(0x11, 0, 2, 0)  # Ctrl up
-    user32.keybd_event(0x0D, 0, 0, 0)  # Enter down
-    user32.keybd_event(0x0D, 0, 2, 0)  # Enter up
-
-
-def spam_cycle(manager, count: float, interval: float):
+def execute_spam_cycle(manager, message_count, delay_between_messages):
     with manager.lock:
         manager.is_spamming = True
         manager.f4_pressed = False
 
     try:
-        start_cycle = time.perf_counter()
-        print(f"start spam cycle with {count} msg.")
-        for i in range(count):
+        start_time = time.perf_counter()
+        for i in range(message_count):
             if not manager.running:
                 break
-            send_message()
-            print(f"msg{i + 1} sent, {count - i - 1} msg(s) remain")
-            if i < count - 1:
-                precise_sleep(interval)
-        cycle_time = time.perf_counter() - start_cycle
-        print(f"sent {count} msg in {cycle_time:.3f}s "f", expected {count * interval:.3f}s")
+            simulate_message_send()
+            if i < message_count - 1:
+                sleep_precisely(delay_between_messages)
+        elapsed_time = time.perf_counter() - start_time
+        print(f"Sent {message_count} messages in {elapsed_time:.3f} seconds.")
     finally:
         with manager.lock:
             manager.is_spamming = False
 
+def update_clipboard(text):
+    user32.OpenClipboard(0)
+    try:
+        user32.EmptyClipboard()
+        encoded_text = text.encode("utf-16-le") + b"\x00\x00"
+        memory_handle = kernel32.GlobalAlloc(0x0042, len(encoded_text))
+        if not memory_handle:
+            raise ctypes.WinError(ctypes.get_last_error())
+
+        memory_pointer = kernel32.GlobalLock(memory_handle)
+        if not memory_pointer:
+            error_code = ctypes.GetLastError()
+            kernel32.GlobalFree(memory_handle)
+            raise MemoryError(f"Failed to lock memory. Error code: {error_code}")
+
+        try:
+            ctypes.memmove(memory_pointer, encoded_text, len(encoded_text))
+        finally:
+            kernel32.GlobalUnlock(memory_handle)
+
+        if not user32.SetClipboardData(CF_UNICODETEXT, memory_handle):
+            kernel32.GlobalFree(memory_handle)
+            raise OSError("Failed to set clipboard data.")
+    finally:
+        user32.CloseClipboard()
 
 if __name__ == "__main__":
     manager = HotkeyManager()
-    print("---pyqqspam---")
-    print("<F4> triggers spamming, <ctrl>+c to quit.")
+    print("---PyQQSpam---")
+    print("Press F4 to start spamming, Ctrl+C to quit.")
     try:
         ctypes.windll.winmm.timeBeginPeriod(1)
-        spam_count = int(input("number of msg per trigger: "))
-        spam_message = input("spam message: ")
-        interval = float(input("delay between msgs (sec): "))
+        message_count = int(input("Number of messages per trigger: "))
+        spam_message = input("Spam message: ")
+        delay_between_messages = float(input("Delay between messages (seconds): "))
 
-        def set_clipboard_text(text):
-            user32.OpenClipboard(0)
-            try:
-                user32.EmptyClipboard()
-                encoded_text = text.encode("utf-16-le") + b'\x00\x00'
-                h_clip_mem = kernel32.GlobalAlloc(0x0042, len(encoded_text))  # GMEM_MOVEABLE | GMEM_ZEROINIT
-                if not h_clip_mem:
-                    raise ctypes.WinError(ctypes.get_last_error())
+        update_clipboard(spam_message)
 
-                p_clip_mem = kernel32.GlobalLock(h_clip_mem)
-                if not p_clip_mem:
-                    error_code = ctypes.GetLastError()  # 获取错误代码
-                    kernel32.GlobalFree(h_clip_mem)
-                    raise MemoryError(f"Failed to lock global memory. Error code: {error_code}")
-
-                try:
-                    ctypes.memmove(p_clip_mem, encoded_text, len(encoded_text))
-                finally:
-                    kernel32.GlobalUnlock(h_clip_mem)
-
-                if not user32.SetClipboardData(CF_UNICODETEXT, h_clip_mem):
-                    kernel32.GlobalFree(h_clip_mem)
-                    raise OSError("Failed to set clipboard data.")
-            finally:
-                user32.CloseClipboard()
-
-        set_clipboard_text(spam_message)
-
-        threading.Thread(target=manager.start_listener, daemon=True).start()
+        threading.Thread(target=manager.listen_for_hotkeys, daemon=True).start()
         while manager.running:
             if manager.f4_pressed and not manager.is_spamming:
-                threading.Thread(target=spam_cycle, args=(manager, spam_count, interval), daemon=True).start()
-            precise_sleep(0.01)
+                threading.Thread(
+                    target=execute_spam_cycle,
+                    args=(manager, message_count, delay_between_messages),
+                    daemon=True
+                ).start()
+            sleep_precisely(0.01)
     except KeyboardInterrupt:
-        manager.terminate()
+        manager.stop()
     finally:
         ctypes.windll.winmm.timeEndPeriod(1)
-        print("program exited successfully.")
+        print("Program exited successfully.")
