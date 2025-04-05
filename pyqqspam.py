@@ -3,7 +3,6 @@ import time
 import threading
 from ctypes import wintypes
 
-MINIMUM_SLEEP = 0.0
 CF_UNICODETEXT = 13
 
 if ctypes.sizeof(ctypes.c_void_p) == 8:
@@ -114,7 +113,8 @@ def execute_spam_cycle(manager, message_count, delay_between_messages):
             if i < message_count - 1:
                 sleep_precisely(delay_between_messages)
         elapsed_time = time.perf_counter() - start_time
-        print(f"Sent {message_count} messages in {elapsed_time:.3f} seconds.")
+        estimated_time = (delay_between_messages + 0.001) * (message_count - 1) + 0.001
+        print(f"Sent {message_count} messages in {elapsed_time:.3f} secs, Expected {estimated_time} secs.")
     finally:
         with manager.lock:
             manager.is_spamming = False
