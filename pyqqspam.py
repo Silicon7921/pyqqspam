@@ -127,9 +127,10 @@ if __name__ == "__main__":
         def set_clipboard_text(text):
             user32.OpenClipboard(0)
             user32.EmptyClipboard()
-            h_clip_mem = kernel32.GlobalAlloc(0x2000, len(text.encode("utf-16-le")) + 2)
+            encoded_text = text.encode("utf-16-le")
+            h_clip_mem = kernel32.GlobalAlloc(0x2000, len(encoded_text) + 2)
             p_clip_mem = kernel32.GlobalLock(h_clip_mem)
-            ctypes.memmove(p_clip_mem, text.encode("utf-16-le"), len(text.encode("utf-16-le")))
+            ctypes.memmove(p_clip_mem, encoded_text, len(encoded_text))
             kernel32.GlobalUnlock(h_clip_mem)
             user32.SetClipboardData(CF_UNICODETEXT, h_clip_mem)
             user32.CloseClipboard()
