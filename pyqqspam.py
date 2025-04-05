@@ -4,24 +4,10 @@ import time
 import pyperclip
 import threading
 import ctypes
-import sys
-import os
 
 pyautogui.PAUSE = 0.0001
 pyautogui.FAILSAFE = False
 MINIMUM_SLEEP = 0.0
-
-def is_admin():
-    try:
-        return ctypes.windll.shell32.IsUserAnAdmin()
-    except:
-        return False
-    
-def request_uac():
-    if not is_admin():
-        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, None, 1)
-        sys.exit()
-    os.chdir(os.path.dirname(sys.argv[0]))
 
 class HotkeyManager:
     def __init__(self):
@@ -96,7 +82,6 @@ def spam_cycle(manager, count:float, interval:float):
             manager.is_spamming = False
 
 if __name__ == "__main__":
-    request_uac()
     manager = HotkeyManager()
     print("---pyqqspam---")
     print("<F4> triggers spamming, <ctrl>+c to quit.")
