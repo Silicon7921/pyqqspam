@@ -1,8 +1,31 @@
 import ctypes
 import time
 import threading
+from ctypes import wintypes
 
 MINIMUM_SLEEP = 0.0
+kernel32 = ctypes.windll.kernel32
+user32 = ctypes.windll.user32
+CF_UNICODETEXT = 13
+
+if ctypes.sizeof(ctypes.c_void_p) == 8:
+    ULONG_PTR = ctypes.c_uint64
+else:
+    ULONG_PTR = ctypes.c_uint32
+
+kernel32.GlobalAlloc.argtypes = [wintypes.UINT, ctypes.c_size_t]
+kernel32.GlobalAlloc.restype = wintypes.HGLOBAL
+kernel32.GlobalLock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalLock.restype = ctypes.c_void_p
+kernel32.GlobalUnlock.argtypes = [wintypes.HGLOBAL]
+kernel32.GlobalUnlock.restype = wintypes.BOOL
+
+user32.OpenClipboard.argtypes = [wintypes.HWND]
+user32.OpenClipboard.restype = wintypes.BOOL
+user32.EmptyClipboard.restype = wintypes.BOOL
+user32.SetClipboardData.argtypes = [wintypes.UINT, wintypes.HANDLE]
+user32.SetClipboardData.restype = wintypes.HANDLE
+user32.CloseClipboard.restype = wintypes.BOOL
 
 class HotkeyManager:
     def __init__(self):
@@ -35,7 +58,7 @@ class HotkeyManager:
                 ("scanCode", wintypes.DWORD),
                 ("flags", wintypes.DWORD),
                 ("time", wintypes.DWORD),
-                ("dwExtraInfo", wintypes.ULONG_PTR),
+                ("dwExtraInfo", ULONG_PTR),
             ]
 
         def low_level_keyboard_proc(nCode, wParam, lParam):
@@ -53,7 +76,8 @@ class HotkeyManager:
                 elif wParam == WM_KEYUP:
                     if kb.vkCode == 0x11:  # Ctrl key
                         self.ctrl_pressed = False
-            return user32.CallNextHookEx(None, nCode, wParam, lParam)
+            # Ensure lParam is cast to ctypes.c_void_p
+            return user32.CallNextHookEx(None, nCode, wParam, ctypes.c_void_p(lParam))
 
         HOOKPROC = ctypes.WINFUNCTYPE(wintypes.LPARAM, wintypes.INT, wintypes.WPARAM, wintypes.LPARAM)
         self.hook_proc = HOOKPROC(low_level_keyboard_proc)
@@ -119,21 +143,31 @@ if __name__ == "__main__":
         spam_message = input("spam message: ")
         interval = float(input("delay between msgs (sec): "))
 
-        # Copy message to clipboard
-        kernel32 = ctypes.windll.kernel32
-        user32 = ctypes.windll.user32
-        CF_UNICODETEXT = 13
-
         def set_clipboard_text(text):
             user32.OpenClipboard(0)
-            user32.EmptyClipboard()
-            encoded_text = text.encode("utf-16-le")
-            h_clip_mem = kernel32.GlobalAlloc(0x2000, len(encoded_text) + 2)
-            p_clip_mem = kernel32.GlobalLock(h_clip_mem)
-            ctypes.memmove(p_clip_mem, encoded_text, len(encoded_text))
-            kernel32.GlobalUnlock(h_clip_mem)
-            user32.SetClipboardData(CF_UNICODETEXT, h_clip_mem)
-            user32.CloseClipboard()
+            try:
+                user32.EmptyClipboard()
+                encoded_text = text.encode("utf-16-le") + b'\x00\x00'
+                h_clip_mem = kernel32.GlobalAlloc(0x0042, len(encoded_text))  # GMEM_MOVEABLE | GMEM_ZEROINIT
+                if not h_clip_mem:
+                    raise ctypes.WinError(ctypes.get_last_error())
+
+                p_clip_mem = kernel32.GlobalLock(h_clip_mem)
+                if not p_clip_mem:
+                    error_code = ctypes.GetLastError()  # 获取错误代码
+                    kernel32.GlobalFree(h_clip_mem)
+                    raise MemoryError(f"Failed to lock global memory. Error code: {error_code}")
+
+                try:
+                    ctypes.memmove(p_clip_mem, encoded_text, len(encoded_text))
+                finally:
+                    kernel32.GlobalUnlock(h_clip_mem)
+
+                if not user32.SetClipboardData(CF_UNICODETEXT, h_clip_mem):
+                    kernel32.GlobalFree(h_clip_mem)
+                    raise OSError("Failed to set clipboard data.")
+            finally:
+                user32.CloseClipboard()
 
         set_clipboard_text(spam_message)
 
