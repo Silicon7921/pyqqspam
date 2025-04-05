@@ -16,7 +16,7 @@ class HotkeyManager:
         self.running = True
         self.is_spamming = False
         self.lock = threading.Lock()
-        print("initialized.")
+        print("initializing...")
 
     def on_press(self, key):
         try:
@@ -39,14 +39,17 @@ class HotkeyManager:
         self.listener.start()
         print("listener started.")
 
-    def terminate(self):
-        print("interrupted.")
-        self.running = False
-        if self.listener:
-            self.listener.stop()
-        sys.exit()
+    def terminate(self,graceful:bool):
+        if not graceful:
+            print("interrupted.")
+            sys.exit(1)
+        else:
+            self.running = False
+            if self.listener:
+                self.listener.stop()
+            sys.exit(0)
 
-def precise_sleep(duration,manager):
+def precise_sleep(duration:float,manager):
     start = time.perf_counter()
     target_end = start + duration
     if duration > 0.1:
@@ -58,7 +61,7 @@ def precise_sleep(duration,manager):
         while time.perf_counter() < target_end and manager.running:
             pass
 
-def spam_cycle(manager, count, interval):
+def spam_cycle(manager, count:float, interval:float):
     with manager.lock:
         manager.is_spamming = True
         manager.f4_pressed = False
@@ -82,8 +85,8 @@ def spam_cycle(manager, count, interval):
 
 if __name__ == "__main__":
     manager = HotkeyManager()
-    print("pyqqspam")
-    print("press <F4> triggers spamming, <ctrl>+c to quit.")
+    print("---pyqqspam---")
+    print("<F4> triggers spamming, <ctrl>+c to quit.")
     try:
         start_cycle = time.perf_counter()
         spam_count = int(input("number of msg per trigger: "))
@@ -95,6 +98,6 @@ if __name__ == "__main__":
                 threading.Thread(target=spam_cycle,args=(manager, spam_count, interval),daemon=True).start()
             precise_sleep(0.01,manager)
     except KeyboardInterrupt:
-        manager.terminate()
+        manager.terminate(True)
     finally:
-        print("program exited succesfully.")
+        print("program exited successfully.")
