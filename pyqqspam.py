@@ -3,34 +3,36 @@ import pyautogui
 import time
 import pyperclip
 import threading
+import sys
 
-f4_pressed = False
+pyautogui.PAUSE = 0.001
+pyautogui.FAILSAFE = False
 
 class HotkeyManager:
     def __init__(self):
         self.ctrl_pressed = False
+        self.f4_pressed = False
         self.listener = None
         self.running = True
-        print("init.")
+        self.is_spamming = False
+        self.lock = threading.Lock()
+        print("initialized.")
 
     def on_press(self, key):
-        global f4_pressed
         try:
             if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
                 self.ctrl_pressed = True
             elif key == keyboard.KeyCode.from_char('c') and self.ctrl_pressed:
                 self.terminate()
-            if key == keyboard.Key.f4:
-                f4_pressed = True
+            if key == keyboard.Key.f4 and not self.is_spamming:
+                with self.lock:
+                    self.f4_pressed = True
         except AttributeError:
             pass
 
     def on_release(self, key):
-        global f4_pressed
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
             self.ctrl_pressed = False
-        if key == keyboard.Key.f4:
-            f4_pressed = False
 
     def start_listener(self):
         self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
@@ -38,35 +40,61 @@ class HotkeyManager:
         print("listener started.")
 
     def terminate(self):
+        print("interrupted.")
         self.running = False
-        if self.listener is not None:
+        if self.listener:
             self.listener.stop()
-        print("Exiting...")
+        sys.exit()
+
+def precise_sleep(duration,manager):
+    start = time.perf_counter()
+    target_end = start + duration
+    if duration > 0.1:
+        while time.perf_counter() < target_end and manager.running:
+            remaining = target_end - time.perf_counter()
+            sleep_time = min(remaining, 0.05)
+            time.sleep(sleep_time)
+    else:
+        while time.perf_counter() < target_end and manager.running:
+            pass
+
+def spam_cycle(manager, count, interval):
+    with manager.lock:
+        manager.is_spamming = True
+        manager.f4_pressed = False
+    
+    try:
+        start_cycle = time.perf_counter()
+        print(f"start spam cycle with {count} msg.")
+        for i in range(count):
+            if not manager.running:
+                break
+            pyautogui.hotkey('ctrl', 'v')
+            pyautogui.press('enter')
+            print(f"msg{i+1} sent, {count-i-1} msg(s) remain")
+            if i < count - 1:
+                precise_sleep(interval, manager=manager)
+        cycle_time = time.perf_counter() - start_cycle
+        print(f"sent {count} msg in {cycle_time:.3f}s "f", expected {count*interval:.3f}s")
+    finally:
+        with manager.lock:
+            manager.is_spamming = False
 
 if __name__ == "__main__":
     manager = HotkeyManager()
     print("pyqqspam")
-    print("if <F4> is pressed spam will begin. <ctrl>+c to quit.")
-    spam_num = int(input("how many times do you want to spam? : "))
-    pyperclip.copy(input("input spam message: "))
-    interval = float(input("input spam delay (second): "))
-
-    def spam_keys():
-        while manager.running:
-            if f4_pressed:
-                for _ in range(spam_num):
-                    pyautogui.hotkey("ctrl", "v")
-                    time.sleep(0.001)
-                    pyautogui.press("enter")
-                    print(f"msg {_+1} of {spam_num} sent, sleeping...")
-                    time.sleep(interval)
-
-    spam_thread = threading.Thread(target=spam_keys, daemon=True)
-    manager.start_listener()
-    spam_thread.start()
-
+    print("press <F4> triggers spamming, <ctrl>+c to quit.")
     try:
+        start_cycle = time.perf_counter()
+        spam_count = int(input("number of msg per trigger: "))
+        pyperclip.copy(input("spam message: "))
+        interval = float(input("delay between msgs (sec): "))
+        manager.start_listener()
         while manager.running:
-            time.sleep(0.1)
+            if manager.f4_pressed and not manager.is_spamming:
+                threading.Thread(target=spam_cycle,args=(manager, spam_count, interval),daemon=True).start()
+            precise_sleep(0.01,manager)
     except KeyboardInterrupt:
         manager.terminate()
+    finally:
+        print("program exited succesfully.")
