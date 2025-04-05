@@ -3,10 +3,25 @@ import pyautogui
 import time
 import pyperclip
 import threading
+import ctypes
 import sys
+import os
 
-pyautogui.PAUSE = 0.001
+pyautogui.PAUSE = 0.0001
 pyautogui.FAILSAFE = False
+MINIMUM_SLEEP = 0.0
+
+def is_admin():
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+    
+def request_uac():
+    if not is_admin():
+        ctypes.windll.shell32.ShellExecuteW(None, "runas", sys.executable, " ".join(sys.argv), None, None, 1)
+        sys.exit()
+    os.chdir(os.path.dirname(sys.argv[0]))
 
 class HotkeyManager:
     def __init__(self):
@@ -33,33 +48,30 @@ class HotkeyManager:
     def on_release(self, key):
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
             self.ctrl_pressed = False
+    
+    def win32_event_filter(self, msg, data):
+            if data.vkCode == 0x43 and (data.flags & 0x80) and self.ctrl_pressed:
+                self.emergency_stop()
+            return True
 
     def start_listener(self):
-        self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release)
+        self.listener = keyboard.Listener(on_press=self.on_press, on_release=self.on_release, win32_event_filter=self.win32_event_filter)
         self.listener.start()
         print("listener started.")
 
-    def terminate(self,graceful:bool):
-        if not graceful:
-            print("interrupted.")
-            sys.exit(1)
-        else:
-            self.running = False
-            if self.listener:
-                self.listener.stop()
-            sys.exit(0)
+    def terminate(self):
+        self.running = False
+        ctypes.windll.kernel32.ExitProcess(1)
 
-def precise_sleep(duration:float,manager):
-    start = time.perf_counter()
-    target_end = start + duration
-    if duration > 0.1:
-        while time.perf_counter() < target_end and manager.running:
-            remaining = target_end - time.perf_counter()
-            sleep_time = min(remaining, 0.05)
-            time.sleep(sleep_time)
-    else:
-        while time.perf_counter() < target_end and manager.running:
-            pass
+def precise_sleep(duration:float):
+    if duration <= 0:
+        return
+    kernel32 = ctypes.windll.kernel32
+    timer = kernel32.CreateWaitableTimerExW(None, None, 0x00000002, 0x1F0003)
+    delay = ctypes.c_longlong(int(-1 * duration * 10000000))
+    kernel32.SetWaitableTimer(timer, ctypes.byref(delay), 0, None, None, 0)
+    kernel32.WaitForSingleObject(timer, 0xFFFFFFFF)
+    kernel32.CloseHandle(timer)
 
 def spam_cycle(manager, count:float, interval:float):
     with manager.lock:
@@ -76,7 +88,7 @@ def spam_cycle(manager, count:float, interval:float):
             pyautogui.press('enter')
             print(f"msg{i+1} sent, {count-i-1} msg(s) remain")
             if i < count - 1:
-                precise_sleep(interval, manager=manager)
+                precise_sleep(interval)
         cycle_time = time.perf_counter() - start_cycle
         print(f"sent {count} msg in {cycle_time:.3f}s "f", expected {count*interval:.3f}s")
     finally:
@@ -84,10 +96,12 @@ def spam_cycle(manager, count:float, interval:float):
             manager.is_spamming = False
 
 if __name__ == "__main__":
+    request_uac()
     manager = HotkeyManager()
     print("---pyqqspam---")
     print("<F4> triggers spamming, <ctrl>+c to quit.")
     try:
+        ctypes.windll.winmm.timeBeginPeriod(1)
         start_cycle = time.perf_counter()
         spam_count = int(input("number of msg per trigger: "))
         pyperclip.copy(input("spam message: "))
@@ -96,8 +110,9 @@ if __name__ == "__main__":
         while manager.running:
             if manager.f4_pressed and not manager.is_spamming:
                 threading.Thread(target=spam_cycle,args=(manager, spam_count, interval),daemon=True).start()
-            precise_sleep(0.01,manager)
+            precise_sleep(0.01)
     except KeyboardInterrupt:
-        manager.terminate(True)
+        manager.terminate()
     finally:
+        ctypes.windll.winmm.timeEndPeriod(1)
         print("program exited successfully.")
