@@ -35,9 +35,9 @@ class HotkeyManager:
         if key == keyboard.Key.ctrl_l or key == keyboard.Key.ctrl_r:
             self.ctrl_pressed = False
     
-    def win32_event_filter(self, msg, data):
+    def win32_event_filter(self,data):
             if data.vkCode == 0x43 and (data.flags & 0x80) and self.ctrl_pressed:
-                self.emergency_stop()
+                self.terminate()
             return True
 
     def start_listener(self):
